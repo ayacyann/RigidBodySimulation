@@ -1,0 +1,10 @@
+schema_version = "1.0.0"
+id = "rigid_body_simulation"
+version = "1.1.0"
+name = "Rigid Body Simulation"
+tagline = "自动创建骨骼刚体、碰撞体和 IK 链"
+maintainer = "ayacyann"
+type = "add-on"
+tags = ["Animation", "Physics", "Rigging"]
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
