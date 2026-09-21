@@ -2,6 +2,11 @@
 
 Blender bone-physics helper add-on (v1.1.0). Use it in Pose Mode from the **Rigid Body Simulation** panel in the 3D View sidebar.
 
+## Author & Demo
+
+- **Author's Bilibili Profile**: [Visit Profile](https://space.bilibili.com/349903711)
+- **Plugin Demo Video**: [Watch on Bilibili](https://www.bilibili.com/video/BV17Fh66WEMV/)
+
 ## Installation
 
 Blender 4.2 or newer is required. The GitHub repository contains source code only; installable archives are published on GitHub Releases.
