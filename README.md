@@ -2,6 +2,11 @@
 
 Blender 骨骼物理辅助插件（v1.1.0）。在姿态模式下，从 3D 视图右侧的 **刚体模拟** 面板使用。
 
+## 作者与演示
+
+- **Bilibili 主页**：[点击访问](https://space.bilibili.com/349903711)
+- **插件演示视频**：[在 Bilibili 观看](https://www.bilibili.com/video/BV17Fh66WEMV/)
+
 ## 安装
 
 需要 Blender 4.2 或更高版本。GitHub 仓库只保存源代码，安装包位于 GitHub Releases：
