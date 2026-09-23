@@ -23,7 +23,7 @@ from bpy.props import (
 bl_info = {
     "name": "Rigid Body Simulation",
     "author": "ayacyann",
-    "version": (1, 1, 0),
+    "version": (1, 1, 1),
     "blender": (3, 6, 0),
     "location": "View3D > Sidebar > Rigid Body Simulation",
     "description": "Create rigid-body simulation proxies for selected pose bones",
@@ -35,8 +35,8 @@ ROOT_COLLECTION = "RBS_Physics"
 BODIES_COLLECTION = "RBS_Bodies"
 COLLIDERS_COLLECTION = "RBS_Colliders"
 IK_COLLECTION = "RBS_IK_Controls"
-# IK controls use a fixed base size.  Keep this in code so the panel does not
-# expose another setting that needs to be tuned for every rig.
+# IK shape metadata uses a fixed base size; the visible custom-shape scale is
+# controlled by RBS_Settings.ik_shape_size in the sidebar panel.
 IK_SHAPE_SIZE = 0.45
 PREFIX = "RBS_"
 CONSTRAINT_PREFIX = "RBS_CONSTRAINT_"
@@ -1273,40 +1273,86 @@ def _remove_selected_colliders(armature, bone_name):
     return len(candidates)
 
 
-def _remove_ik_generated_for_bone(armature, bone_name):
-    """Remove one generated IK control selected directly or by its source bone."""
-    target_names = {
-        bone.name for bone in armature.data.bones
-        if bone.get("rbs_ik_generated")
-        and (bone.name == bone_name or bone.get("rbs_ik_source") == bone_name)
-    }
-    if not target_names:
-        return 0
+def _ik_chain_bone_names(owner, constraint):
+    """Return the bones covered by one IK constraint, including its target.
 
+    ``owner`` is the pose bone that holds the constraint, so the solved chain
+    can be walked upwards from it without a second collection lookup.
+    """
+    names = set()
+    subtarget = str(getattr(constraint, "subtarget", "") or "")
+    if subtarget:
+        names.add(subtarget)
+    if owner is None:
+        return names
+    names.add(owner.name)
+    current = owner.parent
+    for _index in range(max(constraint.chain_count - 1, 0)):
+        if current is None:
+            break
+        names.add(current.name)
+        current = current.parent
+    return names
+
+
+def _remove_ik_generated_for_bone(armature, bone_name):
+    """Remove the IK solver generated for one selected bone.
+
+    The selected bone may be the IK control (target), the bone that owns the IK
+    constraint, or any bone inside the solved chain.  Only constraints created
+    by this add-on are removed, and generated control bones are deleted while
+    user-authored ``.ik`` bones are preserved.
+    """
     removed_constraints = 0
+    target_names = set()
     for pose_bone in armature.pose.bones:
         for constraint in list(pose_bone.constraints):
-            if not constraint.name.startswith(f"{PREFIX}IK_"):
+            if constraint.type != "IK" or not constraint.name.startswith(f"{PREFIX}IK_"):
                 continue
-            if (
-                getattr(constraint, "subtarget", "") in target_names
-                or pose_bone.name in {
-                    armature.data.bones[name].get("rbs_ik_source", "")
-                    for name in target_names
-                    if armature.data.bones.get(name) is not None
-                }
-            ):
-                pose_bone.constraints.remove(constraint)
-                removed_constraints += 1
+            chain_names = _ik_chain_bone_names(pose_bone, constraint)
+            if bone_name not in chain_names:
+                continue
+            # Read the target before removing the constraint; the Python
+            # reference is invalidated as soon as the constraint is deleted.
+            subtarget = str(getattr(constraint, "subtarget", "") or "")
+            is_owner = pose_bone.name == bone_name
+            pose_bone.constraints.remove(constraint)
+            removed_constraints += 1
+            if not subtarget:
+                continue
+            target_bone = armature.data.bones.get(subtarget)
+            if target_bone is not None and target_bone.get("rbs_ik_generated"):
+                target_names.add(subtarget)
+            elif is_owner:
+                target_names.add(subtarget)
+
+    if not removed_constraints and not target_names:
+        return 0
+
+    # Remove generated control bones that are no longer referenced by any
+    # add-on IK constraint, while keeping user-authored ``.ik`` bones intact.
+    still_referenced = {
+        str(getattr(constraint, "subtarget", ""))
+        for pose_bone in armature.pose.bones
+        for constraint in pose_bone.constraints
+        if constraint.type == "IK" and constraint.name.startswith(f"{PREFIX}IK_")
+    }
+    remove_names = {
+        name for name in target_names
+        if name
+        and name not in still_referenced
+        and (armature.data.bones.get(name) is not None)
+        and armature.data.bones[name].get("rbs_ik_generated")
+    }
 
     old_mode = armature.mode
-    if old_mode != "EDIT":
+    if remove_names and old_mode != "EDIT":
         bpy.ops.object.mode_set(mode="EDIT")
-    for name in target_names:
+    for name in remove_names:
         edit_bone = armature.data.edit_bones.get(name)
         if edit_bone is not None:
             armature.data.edit_bones.remove(edit_bone)
-    if old_mode != "EDIT":
+    if remove_names and old_mode != "EDIT":
         bpy.ops.object.mode_set(mode=old_mode)
 
     for obj in list(bpy.data.objects):
@@ -1314,11 +1360,11 @@ def _remove_ik_generated_for_bone(armature, bone_name):
             obj.get("rbs_generated")
             and obj.get("rbs_armature") == armature.name
             and obj.get("rbs_kind") == "IK_SHAPE"
-            and obj.get("rbs_bone") in target_names
+            and obj.get("rbs_bone") in remove_names
         ):
             bpy.data.objects.remove(obj, do_unlink=True)
     _restore_helpers_after_ik(armature)
-    return len(target_names) + removed_constraints
+    return len(remove_names) + removed_constraints
 
 
 def _remove_ik_generated(armature):
@@ -1403,8 +1449,44 @@ def _bone_depth_from(bone, root):
     return depth
 
 
+def _pose_bone_depth(pose_bone):
+    """Return the hierarchy depth of a pose bone; the root is zero."""
+    depth = 0
+    current = pose_bone.parent
+    while current is not None:
+        depth += 1
+        current = current.parent
+    return depth
+
+
+def _is_ik_target_bone(pose_bone):
+    """Return True when a pose bone acts as a dedicated IK control bone."""
+    bone = getattr(pose_bone, "bone", None)
+    if bone is None:
+        return False
+    if bone.get("rbs_ik_generated"):
+        return True
+    name = bone.name.lower()
+    return (
+        name.endswith(".ik")
+        or name.endswith("_ik")
+        or name.startswith("ik_")
+        or name.startswith("ik.")
+    )
+
+
+def _is_pose_descendant(pose_bone, ancestor):
+    """Return True when pose_bone sits below ancestor in the rig."""
+    current = pose_bone.parent
+    while current is not None:
+        if current == ancestor:
+            return True
+        current = current.parent
+    return False
+
+
 def _selected_ik_chain(active_pose_bone):
-    """Return active bone plus its contiguous selected ancestors."""
+    """Return the legacy IK chain: the active bone and selected ancestors."""
     selected = {pb.name for pb in bpy.context.selected_pose_bones or []}
     if active_pose_bone is None or active_pose_bone.name not in selected:
         return []
@@ -1414,6 +1496,68 @@ def _selected_ik_chain(active_pose_bone):
         chain.append(parent)
         parent = parent.parent
     return chain
+
+
+def _selected_ik_components(selected_pose_bones):
+    """Return connected components of the selected pose-bone subgraph."""
+    selected = {pb.name: pb for pb in (selected_pose_bones or []) if pb is not None}
+    remaining = set(selected)
+    components = []
+    while remaining:
+        start = remaining.pop()
+        stack = [selected[start]]
+        component = []
+        while stack:
+            pose_bone = stack.pop()
+            component.append(pose_bone)
+            neighbors = []
+            parent = pose_bone.parent
+            if parent is not None and parent.name in selected:
+                neighbors.append(parent)
+            neighbors.extend(child for child in pose_bone.children if child.name in selected)
+            for neighbor in neighbors:
+                if neighbor.name in remaining:
+                    remaining.remove(neighbor.name)
+                    stack.append(neighbor)
+        component.sort(key=_pose_bone_depth)
+        components.append(component)
+    return components
+
+
+def _selected_ik_two_island_chain(selected_pose_bones, active_pose_bone):
+    """Validate and return ``(chain, reason)`` for the two-island workflow."""
+    components = _selected_ik_components(selected_pose_bones)
+    if len(components) != 2:
+        return None, None
+    active_component = next(
+        (component for component in components if any(pb == active_pose_bone for pb in component)),
+        None,
+    )
+    if active_component is None:
+        return None, "活动骨骼必须属于选中骨骼"
+    if len(active_component) != 1:
+        return None, "两孤岛模式下活动项所在孤岛只能包含一个IK骨骼"
+    chain_component = next(component for component in components if component is not active_component)
+    chain_names = {pb.name for pb in chain_component}
+    for pose_bone in chain_component:
+        degree = int(pose_bone.parent is not None and pose_bone.parent.name in chain_names)
+        degree += sum(child.name in chain_names for child in pose_bone.children)
+        if degree > 2:
+            return None, "IK骨骼链孤岛不能包含分支"
+    tips = [
+        pb for pb in chain_component
+        if not any(child.name in chain_names for child in pb.children)
+    ]
+    roots = [
+        pb for pb in chain_component
+        if pb.parent is None or pb.parent.name not in chain_names
+    ]
+    if len(roots) != 1 or len(tips) != 1:
+        return None, "另一个孤岛必须是连续的单链"
+    ordered = sorted(chain_component, key=_pose_bone_depth)
+    if ordered[-1] != tips[0] or any(cur.parent != prev for prev, cur in zip(ordered, ordered[1:])):
+        return None, "另一个孤岛必须是连续的单链"
+    return ordered, None
 
 
 def _selected_rotation_chain(armature, active_pose_bone):
@@ -1631,7 +1775,13 @@ class RBS_Settings(bpy.types.PropertyGroup):
         # Keep CAPSULE as the second entry to preserve the previous default.
         default=1,
     )
-    ik_shape_size: FloatProperty(name="IK方框大小比例", default=0.45, min=0.05, max=2.0)
+    ik_shape_size: FloatProperty(
+        name="IK自定义物体缩放",
+        default=0.75,
+        min=0.05,
+        max=2.0,
+        description="IK custom shape scale; the same value is applied to X, Y, and Z.",
+    )
     colliders_visible: BoolProperty(name="显示碰撞体", default=True, description="Show Colliders")
     bodies_visible: BoolProperty(name="显示刚体代理", default=True, description="Show Body Proxies")
     chain_preset: EnumProperty(
@@ -1658,114 +1808,180 @@ class RBS_OT_create_ik_chain(bpy.types.Operator):
             and context.active_pose_bone is not None
         )
 
+    @staticmethod
+    def _ik_shape(armature, target_name, length, collection):
+        """Return the box display shape for a target bone, reusing it if present."""
+        for obj in bpy.data.objects:
+            if (
+                obj.get("rbs_generated")
+                and obj.get("rbs_kind") == "IK_SHAPE"
+                and obj.get("rbs_armature") == armature.name
+                and obj.get("rbs_bone") == target_name
+            ):
+                return obj
+        return _make_ik_shape(armature, target_name, length * IK_SHAPE_SIZE, collection)
+
     def execute(self, context):
         arm = context.object
         active = context.active_pose_bone
-        chain = _selected_ik_chain(active)
-        if len(chain) < 2:
-            self.report({"WARNING"}, "请至少选择活动骨骼和一根连续的父骨骼作为IK链")
+        selected = list(context.selected_pose_bones or [])
+        if active is None:
+            self.report({"WARNING"}, "请在姿态模式下选择作为IK骨骼的骨骼作为活动项")
+            return {"CANCELLED"}
+        if len(selected) < 2:
+            self.report({"WARNING"}, "请选中IK骨骼和至少一根需要IK的骨骼")
             return {"CANCELLED"}
 
-        active_name = active.name
-        existing = [
-            bone.name for bone in arm.data.bones
-            if bone.get("rbs_ik_generated") and bone.get("rbs_ik_source") == active_name
-        ]
-        if existing:
-            self.report({"WARNING"}, f"活动骨骼已经存在IK骨骼：{existing[0]}，请先删除IK骨骼")
+        components = _selected_ik_components(selected)
+        two_island = len(components) == 2
+        if len(components) > 2:
+            self.report({"WARNING"}, "创建IK只能选择一个连续骨骼链，或选择两个骨骼孤岛")
             return {"CANCELLED"}
 
-        settings = context.scene.rbs_settings
-        selected_names = [pb.name for pb in context.selected_pose_bones or []]
+        target_name = None
+        generated_target = False
+        if two_island:
+            chain, reason = _selected_ik_two_island_chain(selected, active)
+            if chain is None:
+                self.report({"WARNING"}, reason or "两孤岛选择无效")
+                return {"CANCELLED"}
+            # In two-island mode the singleton active island is the existing
+            # IK control; no generated control bone is added.
+            target_name = active.name
+        else:
+            # Preserve the legacy one-island workflow: the active bone is the
+            # chain tip and a new IK control is generated for it.
+            chain = _selected_ik_chain(active)
+            if len(chain) < 2:
+                self.report({"WARNING"}, "请至少选择活动骨骼和一根连续的父骨骼作为IK链")
+                return {"CANCELLED"}
+            existing = [
+                bone.name for bone in arm.data.bones
+                if bone.get("rbs_ik_generated") and bone.get("rbs_ik_source") == active.name
+            ]
+            if existing:
+                self.report({"WARNING"}, f"活动骨骼已经存在IK骨骼：{existing[0]}，请先删除IK骨骼")
+                return {"CANCELLED"}
+
+        chain_names = [pose_bone.name for pose_bone in chain]
+        chain_length = len(chain)
+        # The legacy mode keeps its original active-tip owner.  In
+        # two-island mode the non-IK island's terminal bone owns the solver.
+        solver_pose = chain[-1] if two_island else active
+        solver_name = solver_pose.name
+
+        selected_names = [pose_bone.name for pose_bone in selected]
         old_mode = arm.mode
-        bpy.ops.object.mode_set(mode="OBJECT")
-        bpy.context.view_layer.objects.active = arm
-        arm.select_set(True)
-        bpy.ops.object.mode_set(mode="EDIT")
 
-        source = arm.data.edit_bones.get(active_name)
-        if source is None:
+        if target_name is None:
+            generated_target = True
+            bpy.ops.object.mode_set(mode="OBJECT")
+            bpy.context.view_layer.objects.active = arm
+            arm.select_set(True)
+            bpy.ops.object.mode_set(mode="EDIT")
+            source = arm.data.edit_bones.get(solver_name)
+            if source is None:
+                bpy.ops.object.mode_set(mode="POSE")
+                self.report({"ERROR"}, "无法读取需要IK的骨骼编辑数据")
+                return {"CANCELLED"}
+            direction = source.tail - source.head
+            length = max(direction.length, 0.1)
+            direction.normalize()
+            ik_bone = arm.data.edit_bones.new(f"{PREFIX}IK_{arm.name}_{solver_name}")
+            ik_bone.head = source.tail
+            ik_bone.tail = source.tail + direction * length
+            ik_bone.roll = source.roll
+            ik_bone.use_deform = False
+            ik_bone.parent = None
+            target_name = ik_bone.name
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+        target_data = arm.data.bones.get(target_name)
+        if target_data is not None:
+            target_data["rbs_ik_source"] = solver_name
+            target_data["rbs_ik_chain_length"] = chain_length
+            if generated_target:
+                target_data["rbs_ik_generated"] = True
+            try:
+                target_data.show_wire = True
+            except AttributeError:
+                pass
+
+        if arm.mode != "POSE":
             bpy.ops.object.mode_set(mode="POSE")
-            self.report({"ERROR"}, "无法读取活动骨骼的编辑数据")
-            return {"CANCELLED"}
-        direction = source.tail - source.head
-        length = max(direction.length, 0.1)
-        direction.normalize()
-        ik_name_base = f"{PREFIX}IK_{arm.name}_{active_name}"
-        ik_bone = arm.data.edit_bones.new(ik_name_base)
-        ik_bone.head = source.tail
-        ik_bone.tail = source.tail + direction * length
-        ik_bone.roll = source.roll
-        ik_bone.use_deform = False
-        ik_bone.parent = None
-        ik_name = ik_bone.name
-        bpy.ops.object.mode_set(mode="OBJECT")
 
-        ik_data = arm.data.bones.get(ik_name)
-        ik_data["rbs_ik_generated"] = True
-        ik_data["rbs_ik_source"] = active_name
-        ik_data["rbs_ik_chain_length"] = len(chain)
-        try:
-            ik_data.show_wire = True
-        except AttributeError:
-            pass
+        ik_pose = arm.pose.bones.get(target_name)
+        if ik_pose is not None:
+            # Give the IK bone a box display so it is easy to identify and
+            # select, and keep it a pure translation handle.
+            root_collection = bpy.data.collections.get(ROOT_COLLECTION) or _collection(ROOT_COLLECTION)
+            ik_collection = _collection(IK_COLLECTION, root_collection)
+            shape_length = max(
+                (target_data.tail_local - target_data.head_local).length, 0.1
+            )
+            shape = self._ik_shape(arm, target_name, shape_length, ik_collection)
+            ik_pose.custom_shape = shape
+            settings = getattr(context.scene, "rbs_settings", None)
+            shape_scale = float(getattr(settings, "ik_shape_size", 0.75))
+            shape_scale = max(shape_scale, 0.05)
+            ik_pose.lock_rotation = (True, True, True)
+            ik_pose.lock_rotation_w = True
+            ik_pose.lock_rotations_4d = True
+            ik_pose.lock_scale = (True, True, True)
+            ik_pose.lock_location = (False, False, False)
+            ik_pose.rotation_mode = "QUATERNION"
+            # IK controls are translation handles in the armature's edit
+            # position; clear any pose-space offset before exposing them.
+            ik_pose.location = (0.0, 0.0, 0.0)
+            # Keep the IK custom-shape displacement at zero so the handle's
+            # transform panel reports no positional offset.
+            ik_pose.custom_shape_translation = (0.0, 0.0, 0.0)
+            ik_pose.custom_shape_scale_xyz = (shape_scale, shape_scale, shape_scale)
+            try:
+                ik_pose.color.palette = "THEME_YELLOW"
+            except (AttributeError, TypeError):
+                pass
 
-        root_collection = bpy.data.collections.get(ROOT_COLLECTION) or _collection(ROOT_COLLECTION)
-        ik_collection = _collection(IK_COLLECTION, root_collection)
-        shape = _make_ik_shape(arm, ik_name, length * IK_SHAPE_SIZE, ik_collection)
+        # Re-creating IK for the same chain replaces only the solver generated
+        # by this add-on and leaves other constraints untouched.
+        for old in list(solver_pose.constraints):
+            if old.type == "IK" and old.name.startswith(f"{PREFIX}IK_"):
+                solver_pose.constraints.remove(old)
 
-        bpy.ops.object.mode_set(mode="POSE")
-        ik_pose = arm.pose.bones.get(ik_name)
-        active_pose = arm.pose.bones.get(active_name)
-        ik_pose.custom_shape = shape
-        # IK controls are translation handles.  Locking rotation (including
-        # the quaternion W component) makes a normal ``G`` transform move the
-        # selected bone instead of allowing accidental rotation when the
-        # handle is clicked away from its tail.  Scale is locked as well so
-        # the rectangular display keeps its configured proportions.
-        ik_pose.lock_rotation = (True, True, True)
-        ik_pose.lock_rotation_w = True
-        ik_pose.lock_rotations_4d = True
-        ik_pose.lock_scale = (True, True, True)
-        ik_pose.lock_location = (False, False, False)
-        ik_pose.rotation_mode = "QUATERNION"
-        # Match the control's initial orientation to the active bone's current
-        # pose.  Its origin is kept at the active tail so the IK target starts
-        # where the selected chain currently ends.
-        target_matrix = active_pose.matrix.copy()
-        target_matrix.translation = active_pose.tail
-        ik_pose.matrix = target_matrix
-        bpy.context.view_layer.update()
-        # The generated target bone starts at the active bone's tail so it
-        # remains a useful IK handle.  Offset only its custom shape back along
-        # the local bone axis, placing the rectangular handle over the active
-        # bone segment instead of in the endpoint circle.
-        ik_pose.custom_shape_translation = (0.0, -length * 0.5, 0.0)
-        # Use the tested proportions directly: a slim rectangular handle
-        # whose local Y axis follows the IK bone.
-        ik_pose.custom_shape_scale_xyz = (0.2, 1.0, 0.2)
-        try:
-            ik_pose.color.palette = "THEME_YELLOW"
-        except (AttributeError, TypeError):
-            pass
         # Bone-parented passive helpers are detached before the solver is
         # added. Otherwise an IK solver spanning a simulated chain can feed
         # the rigid-body world back through the root anchor/colliders.
-        _freeze_helpers_on_ik_chain(arm, [pb.name for pb in chain])
-        constraint = active_pose.constraints.new("IK")
-        constraint.name = f"{PREFIX}IK_{ik_name}"
+        solved_names = [solver_name]
+        parent_pose = solver_pose.parent
+        for _index in range(max(chain_length - 1, 0)):
+            if parent_pose is None:
+                break
+            solved_names.append(parent_pose.name)
+            parent_pose = parent_pose.parent
+        _freeze_helpers_on_ik_chain(arm, solved_names)
+        constraint = solver_pose.constraints.new("IK")
+        constraint.name = f"{PREFIX}IK_{target_name}"
         constraint.target = arm
-        constraint.subtarget = ik_name
-        constraint.chain_count = len(chain)
+        constraint.subtarget = target_name
+        constraint.chain_count = chain_length
+        constraint.iterations = 500
+        constraint.use_tail = True
+        constraint.use_stretch = True
+        constraint.weight = 1.0
+        constraint.orient_weight = 1.0
         constraint.influence = 1.0
         _restore_ik_colliders(arm)
 
         for bone in arm.data.bones:
-            bone.select = bone.name == ik_name or bone.name in selected_names
-        arm.data.bones.active = ik_data
+            bone.select = bone.name == target_name or bone.name in selected_names
+        if target_data is not None:
+            arm.data.bones.active = target_data
         if old_mode != "POSE":
             bpy.ops.object.mode_set(mode=old_mode)
-        self.report({"INFO"}, f"已创建IK骨骼 {ik_name}，反向计算链长度为 {len(chain)}")
+        self.report(
+            {"INFO"},
+            f"已在骨骼 {solver_name} 上添加IK，IK骨骼 {target_name}，链条长度为 {chain_length}",
+        )
         return {"FINISHED"}
 
 
@@ -2530,6 +2746,11 @@ class RBS_PT_panel(bpy.types.Panel):
         )
         col.separator()
         col.label(text=_ui_text(context, "IK骨骼链", "IK Bone Chain"))
+        col.prop(
+            settings,
+            "ik_shape_size",
+            text=_ui_text(context, "IK自定义物体缩放", "IK Custom Object Scale"),
+        )
         col.operator("rbs.create_ik_chain", text=_ui_text(context, "创建IK骨骼链", "Create IK Bone Chain"), icon="CONSTRAINT_BONE")
         col.operator("rbs.remove_ik_selected", text=_ui_text(context, "删除当前骨骼IK", "Delete Selected Bone IK"), icon="TRASH")
         col.separator()
