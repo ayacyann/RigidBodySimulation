@@ -188,8 +188,8 @@ IK 模块会创建 Blender 原生 IK 约束和一个可移动的自定义控制�
 
 <table>
 <tr>
-<td><img src="images/旋转传递手指选择.jpg" alt="选择手指旋转传递链" width="50%"><br><sub>选择手指骨骼链</sub></td>
-<td><img src="images/旋转传递手指创建与使用.jpg" alt="创建并使用手指旋转传递" width="50%"><br><sub>创建与使用效果</sub></td>
+<td><img src="images/旋转传递手指选择.jpg" alt="选择手指旋转传递链" width="100%"><br><sub>选择手指骨骼链</sub></td>
+<td><img src="images/旋转传递手指创建与使用.jpg" alt="创建并使用手指旋转传递" width="100%"><br><sub>创建与使用效果</sub></td>
 </tr>
 </table>
 
