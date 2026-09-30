@@ -1,10 +1,24 @@
 # Rigid Body Simulation
 
-> Blender bone-physics helper add-on · **v1.1.1**
+> Blender bone-physics helper add-on · **v1.1.2**
 >
 > Build editable rigid-body chains, bone colliders, continuous or two-island IK bindings, and local X-axis rotation-transfer helpers directly in Pose Mode.
 
 ![Blender bone rigid-body simulation](images/骨骼刚体头发模拟后.jpg)
+
+
+## v1.1.2 Changes
+
+- The add-on panel is now visible in Object, Edit, and Pose modes; creation operators still enforce their own mode requirements.
+- During chain creation, the root follows the first BODY proxy created for that chain. A parented MMD/MMR root uses an imperative anchor update without a dependency cycle, while keeping the damped follow active.
+- On the build frame, new proxies remain kinematic until the parent pose is consumed. During playback, moving or rotating Center, Spine, or another parent bone continuously rebases the entire chain before dynamic simulation resumes.
+- Deleting a chain removes only that chain’s generated damped follow; user-authored damped follows remain. A hidden or muted chain follow is reused and overridden instead of duplicated.
+- The default damped-follow strength is now `0.5`.
+- Spring stiffness and damping now use a `1–100` panel scale and are multiplied by `10000` internally when rigid-body joints are created. The built-in presets are synchronized to skirt `0.85 / 10 / 7.5`, hair `0.95 / 15 / 10`, and ribbon `0.75 / 7.5 / 5` (linear damping / spring stiffness / spring damping).
+- The **Limit Distance** panel parameter has been removed. Chain joints still use the MMDTools-style native rigid-body joint and angular-spring setup, without object-level distance constraints.
+- Center, Spine, and other upstream parent-bone translations and rotations now continuously rebase the complete rigid-body chain through the animated anchor before dynamic simulation resumes.
+- A **Reset Body Positions** button beside chain creation moves every generated proxy on the active armature back to its corresponding bone center while preserving the root joint and damped-follow relationship.
+- A new Damped Follow module is shown below the rigid-body chain controls. It can create or override follow constraints for selected bones with a configurable strength. Bones whose first child has no rigid-body proxy are skipped.
 
 ## Requirements and installation
 
@@ -14,12 +28,28 @@
 
 Download `RigidBodySimulation-<version>-extension.zip` (recommended for Blender 4.x) or `RigidBodySimulation-<version>-addon.zip`. Install an extension from **Edit > Preferences > Extensions > Install from Disk**, or install the add-on from **Edit > Preferences > Add-ons > Install...**. Source installation is also supported by copying the `RigidBodySimulation` folder into Blender's user `scripts/addons/` directory.
 
+### Source module layout
+
+In `v1.1.2`, the add-on entry point and feature code are separated under `modules/` without changing the feature set:
+
+- `core.py`: shared constants, physics objects, anchors, constraints, migration, and dependency-graph helpers.
+- `chain.py`: rigid-body chain creation, body reset, damped follow, presets, and chain deletion.
+- `ik.py`: IK chain creation and deletion.
+- `colliders.py`: bone collider creation, visibility, and deletion.
+- `rotation_transfer.py`: rotation-transfer constraints.
+- `properties.py`: scene properties and rigid-body chain preset properties.
+- `panel.py`: sidebar panel drawing.
+- `registration.py`: class registration, handlers, and add-on lifecycle.
+
+The top-level `__init__.py` now contains only add-on metadata and module registration forwarding, so later edits can stay within the relevant feature module.
+
 ## Contents
 
 - [1. Rigid-body bone chains](#1-rigid-body-bone-chains)
 - [2. Bone colliders](#2-bone-colliders)
 - [3. IK binding](#3-ik-binding)
 - [4. Rotation transfer](#4-rotation-transfer)
+- [5. Convert to MMD rigid bodies](#5-convert-to-mmd-rigid-bodies)
 - [Visibility, deletion, and tips](#visibility-deletion-and-tips)
 
 ## 1. Rigid-body bone chains
@@ -58,8 +88,8 @@ The Skirt preset favors stable root following. Tune root-follow strength for the
 | Body radius / length scale | Shape and coverage of each proxy |
 | Mass | Inertia of dynamic bodies |
 | Linear / angular damping | Suppress translation and rotation jitter |
-| Root follow strength | Keep the chain attached to the animated root |
-| Spring stiffness / damping | Control recovery and oscillation between neighboring bodies |
+| Root follow strength (default `0.5`) | Keep the chain attached to the animated root |
+| Spring stiffness / damping | Control recovery and oscillation; panel range `1–100`, internally multiplied by `10000` |
 
 The three built-in presets can be adjusted after selection. Use the preset name field and **Add** to save a scene-local custom preset; **Delete Preset** removes a saved user preset.
 
@@ -99,11 +129,26 @@ Select an existing IK control as the active bone and select a separate chain to 
 Rotation transfer is useful for fingers and helper chains that should inherit a parent's local X rotation. Select one bone or a continuous chain, make the intended starting bone active, and click **Add**.
 
 <table><tr>
-<td><img src="images/旋转传递手指选择.jpg" alt="Select finger rotation-transfer chain" width="100%"><br><sub>Select chain</sub></td>
-<td><img src="images/旋转传递手指创建与使用.jpg" alt="Use finger rotation transfer" width="100%"><br><sub>Create and use</sub></td>
+<td><img src="images/旋转传递手指选择.jpg" alt="Select finger rotation-transfer chain" width="50%"><br><sub>Select chain</sub></td>
+<td><img src="images/旋转传递手指创建与使用.jpg" alt="Use finger rotation transfer" width="50%"><br><sub>Create and use</sub></td>
 </tr></table>
 
 The add-on creates `Copy Rotation` constraints that use only the local X axis. Re-adding replaces only this add-on's generated transfer constraints and leaves manually authored constraints untouched. **Delete** removes transfers from selected bones; **Delete All Rotation Transfer** clears all transfers generated by this add-on on the active armature.
+
+
+## 5. Convert to MMD rigid bodies
+
+With **mmd_tools** enabled, click **MMD Physics > Convert to MMD Rigid Bodies** in the add-on panel. The operator copies the active armature's generated dynamic bodies, root anchors, bone colliders, and chain joints into native mmd_tools objects, including:
+
+- bone bindings, shape sizes, mass, damping, friction, bounce, and collision groups;
+- joint linear/angular limits and spring settings;
+- an MMD model root with `rigidbodies` and `joints` groups.
+
+The native RBS simulation is preserved. Running the conversion again replaces only objects previously generated by this exporter. The result uses mmd_tools' `mmd_type`, `mmd_rigid`, and `mmd_joint` data and can be edited in mmd_tools or exported through its PMX workflow. If mmd_tools is not enabled, the operator cancels with an explanatory message instead of producing incomplete metadata.
+
+### “mmd_tools not detected” although it is enabled
+
+Older versions also reported **mmd_tools initialization failures** as “not detected”. For example, the full mmd_tools add-on may be enabled but fail to initialize because the Blender Python environment is missing the `opencc` dependency. Blender 4.2+ extensions may load the main module as `bl_ext.<repository>.mmd_tools` instead of top-level `mmd_tools`; v1.1.2 detects both forms. The latest version prints the original traceback and distinguishes a missing main add-on, a missing dependency, and an incompatible API. `mmd_tools_append` is not a replacement for the full mmd_tools add-on.
 
 ## Visibility, deletion, and tips
 
