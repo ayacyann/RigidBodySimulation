@@ -121,6 +121,8 @@ The rigid-body world's **Steps Per Frame** and **Solver Iterations** affect coll
 
 Bone colliders are passive obstacles driven by bones. Use them on the torso, arms, legs, or other body parts to interact with simulated hair and clothing. Select one or more bones, set the radius, choose **Box**, **Capsule**, or **Sphere**, and click **Add Colliders**. Adding a collider again for the same bone replaces that add-on collider.
 
+Rigid-body proxies generated for chains and bone colliders use Blender's **last collision collection (collection 20, index 19)**. MMDTools/PMX rigid bodies use the first 16 collision groups, so they are assigned to separate layers and RBS bodies do not collide with MMDTools bodies by default.
+
 | Add bone colliders | Collision result |
 | --- | --- |
 | ![Create bone colliders](images/创建骨骼碰撞体.gif) | ![Rigid-body and bone-collider interaction](images/刚体链与骨骼碰撞体的碰撞交互效果.jpg) |
