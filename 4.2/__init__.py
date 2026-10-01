@@ -4,7 +4,7 @@ bl_info = {
     "name": "Rigid Body Simulation",
     "author": "ayacyann",
     "version": (1, 1, 3),
-    "blender": (5, 2, 0),
+    "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Rigid Body Simulation",
     "description": "Create rigid-body simulation proxies for selected pose bones",
     "category": "Animation",

@@ -6,5 +6,5 @@ tagline = "自动创建骨骼刚体、碰撞体和 IK 链"
 maintainer = "ayacyann"
 type = "add-on"
 tags = ["Animation", "Physics", "Rigging"]
-blender_version_min = "5.2.0"
+blender_version_min = "4.2.0"
 license = ["SPDX:GPL-3.0-or-later"]

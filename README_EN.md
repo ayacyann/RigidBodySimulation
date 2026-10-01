@@ -1,166 +1,174 @@
 # Rigid Body Simulation
 
-> Blender bone-physics helper add-on · **v1.1.2**
+> Blender bone-physics helper add-on · **v1.1.3**
 >
-> Build editable rigid-body chains, bone colliders, continuous or two-island IK bindings, and local X-axis rotation-transfer helpers directly in Pose Mode.
+> Turn bone chains into editable rigid-body simulations, with batch chain creation, bone colliders, IK binding, damped follow, and local rotation transfer.
 
-![Blender bone rigid-body simulation](images/骨骼刚体头发模拟后.jpg)
+![Bone rigid-body simulation](images/所有刚体链的模拟效果.gif)
 
+## Features
 
-## v1.1.2 Changes
+- Generate rigid-body proxies and spring joints for selected bone chains, including multiple chains at once.
+- Add bone colliders so simulated chains can interact with the body, arms, legs, and other parts.
+- Create IK from a continuous chain or bind a separate IK control bone to a solver chain in two-island mode.
+- Reset physics proxies, create damped-follow constraints, toggle proxy visibility, and clean up generated content.
+- Toggle limit-surface preview on armature-bound subdivision meshes and transfer local X-axis rotation for fingers and helper chains.
 
-- The add-on panel is now visible in Object, Edit, and Pose modes; creation operators still enforce their own mode requirements.
-- During chain creation, the root follows the first BODY proxy created for that chain. A parented MMD/MMR root uses an imperative anchor update without a dependency cycle, while keeping the damped follow active.
-- On the build frame, new proxies remain kinematic until the parent pose is consumed. During playback, moving or rotating Center, Spine, or another parent bone continuously rebases the entire chain before dynamic simulation resumes.
-- Deleting a chain removes only that chain’s generated damped follow; user-authored damped follows remain. A hidden or muted chain follow is reused and overridden instead of duplicated.
-- The default damped-follow strength is now `0.5`.
-- Spring stiffness and damping now use a `1–100` panel scale and are multiplied by `10000` internally when rigid-body joints are created. The built-in presets are synchronized to skirt `0.85 / 10 / 7.5`, hair `0.95 / 15 / 10`, and ribbon `0.75 / 7.5 / 5` (linear damping / spring stiffness / spring damping).
-- The **Limit Distance** panel parameter has been removed. Chain joints still use the MMDTools-style native rigid-body joint and angular-spring setup, without object-level distance constraints.
-- Center, Spine, and other upstream parent-bone translations and rotations now continuously rebase the complete rigid-body chain through the animated anchor before dynamic simulation resumes.
-- A **Reset Body Positions** button beside chain creation moves every generated proxy on the active armature back to its corresponding bone center while preserving the root joint and damped-follow relationship.
-- A new Damped Follow module is shown below the rigid-body chain controls. It can create or override follow constraints for selected bones with a configurable strength. Bones whose first child has no rigid-body proxy are skipped.
+## Versions and installation
 
-## Requirements and installation
+| Package | Minimum Blender version | Intended for |
+| --- | --- | --- |
+| `4.2` build | Blender 4.2 | Blender 4.2 and newer 4.x releases |
+| `5.2` build | Blender 5.2 | Blender 5.2 and newer releases |
 
-- Blender **4.2 or newer**.
-- An editable Armature.
-- Enter **Pose Mode**, press `N` in the 3D View, and open the **Rigid Body Simulation** tab.
+Both builds provide the same feature modules; their main difference is the Blender API compatibility target. Install only the build matching your Blender version. Do not mix files from the 4.2 and 5.2 builds.
 
-Download `RigidBodySimulation-<version>-extension.zip` (recommended for Blender 4.x) or `RigidBodySimulation-<version>-addon.zip`. Install an extension from **Edit > Preferences > Extensions > Install from Disk**, or install the add-on from **Edit > Preferences > Add-ons > Install...**. Source installation is also supported by copying the `RigidBodySimulation` folder into Blender's user `scripts/addons/` directory.
+1. Download the package for your Blender version from GitHub Releases.
+2. Use the package marked **4.2** with Blender 4.2, or the **5.2** package with Blender 5.2.
+3. Install a Blender 4.x extension from **Edit > Preferences > Extensions > Install from Disk**. Install a legacy add-on package from **Edit > Preferences > Add-ons > Install...**.
+4. Enable the add-on and select an Armature. Press `N` in the 3D View and open the **Rigid Body Simulation** sidebar tab.
 
-### Source module layout
-
-In `v1.1.2`, the add-on entry point and feature code are separated under `modules/` without changing the feature set:
-
-- `core.py`: shared constants, physics objects, anchors, constraints, migration, and dependency-graph helpers.
-- `chain.py`: rigid-body chain creation, body reset, damped follow, presets, and chain deletion.
-- `ik.py`: IK chain creation and deletion.
-- `colliders.py`: bone collider creation, visibility, and deletion.
-- `rotation_transfer.py`: rotation-transfer constraints.
-- `properties.py`: scene properties and rigid-body chain preset properties.
-- `panel.py`: sidebar panel drawing.
-- `registration.py`: class registration, handlers, and add-on lifecycle.
-
-The top-level `__init__.py` now contains only add-on metadata and module registration forwarding, so later edits can stay within the relevant feature module.
-
-## Contents
-
-- [1. Rigid-body bone chains](#1-rigid-body-bone-chains)
-- [2. Bone colliders](#2-bone-colliders)
-- [3. IK binding](#3-ik-binding)
-- [4. Rotation transfer](#4-rotation-transfer)
-- [5. Convert to MMD rigid bodies](#5-convert-to-mmd-rigid-bodies)
-- [Visibility, deletion, and tips](#visibility-deletion-and-tips)
+Creation tools for chains, colliders, IK, and rotation transfer require **Pose Mode**. The panel is also visible in Object and Edit modes for settings and management.
 
 ## 1. Rigid-body bone chains
 
-Select a continuous parent-child chain, make the root active, choose a preset or tune the parameters, and click **Create Rigid-Body Chain**. The root remains animation-driven while the other selected bones receive generated rigid-body proxies and chain constraints.
+Rigid-body chains are useful for hair, ribbons, skirts, and clothing that should follow character animation while retaining dynamic motion. The add-on creates a rigid-body proxy and physics joints for the selected bones; the root remains animation-driven.
 
-### Hair preset
+### Create a single chain
 
-The Hair preset is a balanced starting point for longer hair strands. Increase damping if the strand jitters during fast motion.
+1. In Pose Mode, select a continuous parent-child chain.
+2. Make the root the active bone. The root itself does not receive a dynamic body.
+3. Choose a preset or adjust body radius, length scale, mass, damping, root-follow strength, and spring settings.
+4. Click **Create Rigid-Body Chain** and play the timeline to inspect the simulation.
 
-<table>
-<tr><td><img src="images/骨骼刚体头发选中.jpg" alt="Select hair chain" width="100%"><br><sub>Select hair chain</sub></td><td><img src="images/骨骼刚体头发创建.jpg" alt="Create hair chain" width="100%"><br><sub>Create chain</sub></td></tr>
-<tr><td><img src="images/骨骼刚体头发模拟前.jpg" alt="Hair before simulation" width="100%"><br><sub>Before simulation</sub></td><td><img src="images/骨骼刚体头发模拟后.jpg" alt="Hair after simulation" width="100%"><br><sub>After simulation</sub></td></tr>
-</table>
+The images show selecting one chain, creating its proxies, and the resulting simulation.
 
-### Ribbon preset
-
-The Ribbon preset is lighter and more flexible. It works well for straps, ribbons, and narrow cloth strips; raise spring damping when the ribbon oscillates too much.
-
-<table>
-<tr><td><img src="images/骨骼刚体飘带选中.jpg" alt="Select ribbon chain" width="100%"><br><sub>Select ribbon chain</sub></td><td><img src="images/骨骼刚体飘带创建.jpg" alt="Create ribbon chain" width="100%"><br><sub>Create chain</sub></td></tr>
-<tr><td><img src="images/骨骼刚体飘带模拟前.jpg" alt="Ribbon before simulation" width="100%"><br><sub>Before simulation</sub></td><td><img src="images/骨骼刚体飘带模拟后.jpg" alt="Ribbon after simulation" width="100%"><br><sub>After simulation</sub></td></tr>
-</table>
-
-### Skirt preset
-
-The Skirt preset favors stable root following. Tune root-follow strength for the desired relationship between the character animation and the simulated hem.
-
-<table>
-<tr><td><img src="images/骨骼刚体裙摆选中.jpg" alt="Select skirt chain" width="100%"><br><sub>Select skirt chain</sub></td><td><img src="images/骨骼刚体裙摆创建.jpg" alt="Create skirt chain" width="100%"><br><sub>Create chain</sub></td></tr>
-<tr><td><img src="images/骨骼刚体裙摆模拟前.jpg" alt="Skirt before simulation" width="100%"><br><sub>Before simulation</sub></td><td><img src="images/骨骼刚体裙摆模拟后.jpg" alt="Skirt after simulation" width="100%"><br><sub>After simulation</sub></td></tr>
-</table>
-
-| Parameter | Purpose |
+| Select a chain | Create a rigid-body chain |
 | --- | --- |
-| Body radius / length scale | Shape and coverage of each proxy |
-| Mass | Inertia of dynamic bodies |
-| Linear / angular damping | Suppress translation and rotation jitter |
-| Root follow strength (default `0.5`) | Keep the chain attached to the animated root |
-| Spring stiffness / damping | Control recovery and oscillation; panel range `1–100`, internally multiplied by `10000` |
+| ![Select one chain](images/选中单个链条.jpg) | ![Create a chain](images/选中单个链条创建刚体链.jpg) |
 
-The three built-in presets can be adjusted after selection. Use the preset name field and **Add** to save a scene-local custom preset; **Delete Preset** removes a saved user preset.
+![Simulation of all rigid-body chains](images/所有刚体链的模拟效果.gif)
+
+### Multiple chains and batch skirt setup
+
+The original workflow using an active root and one continuous chain is preserved. The add-on can also identify multiple chains from the current selection:
+
+- Select the roots of multiple chains to build them in one operation.
+- When selected bones belong to separate chain islands, the add-on finds each chain root and builds the chains independently.
+- For segmented skirt rigs, select all chain roots and create proxies and joints for each chain in one operation.
+
+![Select bones from separate chain islands](images/选择任意孤岛链条的任意一根骨骼.jpg)
+
+![Build rigid-body chains from multiple islands](images/选择任意孤岛链条的任意一根骨骼创建对应的刚体链.jpg)
+
+![Select all skirt chain roots](images/选择裙摆刚体链所有根骨骼.jpg)
+
+![Batch-create skirt chains](images/批量创建裙摆刚体骨骼链.jpg)
+
+### Presets and parameters
+
+The panel provides four built-in presets: **Default, Skirt, Hair, and Ribbon**. Values can be adjusted after choosing a preset. Enter a name and click **Add** to save the current settings to the scene. Select a user preset to delete it; leaving the name field empty saves changes to the current preset.
+
+#### Hair
+
+The Hair preset starts with a larger proxy radius and mass for longer strands. Increase damping gradually if the strand keeps oscillating or jitters during fast motion.
+
+#### Ribbon
+
+The Ribbon preset uses a smaller radius and mass with softer springs for narrow, elongated structures. Increase spring damping or reduce mass if it rebounds too much.
+
+#### Skirt
+
+The Skirt preset offers moderate mass and stable root following, making it suitable for batch creation across multiple skirt chains. Tune proxy radius and length scale for the number of layers and spacing between chains.
+
+| Preset | Radius | Length scale | Mass | Linear damping | Angular damping | Root follow | Spring stiffness | Spring damping |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Default | 0.01 | 0.85 | 0.50 | 0.85 | 0.45 | 0.50 | 10 | 7.5 |
+| Skirt | 0.01 | 0.85 | 0.50 | 0.85 | 0.45 | 0.50 | 10 | 7.5 |
+| Hair | 0.02 | 0.80 | 1.50 | 0.95 | 0.55 | 0.50 | 15 | 10 |
+| Ribbon | 0.005 | 0.85 | 0.25 | 0.75 | 0.65 | 0.50 | 7.5 | 5 |
+
+Radius and length scale set proxy coverage; mass controls inertia; linear and angular damping suppress motion. Root-follow strength and spring settings affect how the chain follows, rebounds, and settles. Spring stiffness and damping use a `1–100` panel scale and are converted to internal values when joints are created.
+
+### Follow, reset, and baked preview
+
+- **Damped Follow** creates or overrides a follow constraint for each selected bone. Its target proxy is found from the first child bone; bones without a matching child proxy are skipped.
+- **Reset Body Positions** moves all generated rigid-body proxies for the active armature back to their corresponding bone centers while preserving chain joints and root-follow relationships.
+- **Optimize Baked Preview** toggles the subdivision modifiers' **Use Limit Surface** option on meshes bound to the armature. It helps compare baked simulation previews; it does not clear or rebake the rigid-body cache.
+- **Rotate bones during playback** to move upstream bones; the chain is updated from its anchor and continues simulating.
+
+If an old cache leaves a proxy at an outdated position, inspect the rigid-body world cache and clear or rebake it. Use **Reset Body Positions** afterward if the proxies need realignment.
+
+![Proxy left in place by an old cache](images/旧缓存导致的刚体代理停留.jpg)
+
+| Reset body positions | Follow root motion after reset |
+| --- | --- |
+| ![Reset body positions](images/重置刚体位置功能.jpg) | ![Follow root motion after reset](images/重置刚体后即可跟随根骨骼移动和旋转.gif) |
+
+| Rotate a bone during simulation | Damped follow auto-target |
+| --- | --- |
+| ![Rotate bones during simulation](images/模拟时的骨骼旋转操作.gif) | ![Create damped follow](images/创建阻尼跟随并自动指定目标代理.gif) |
+
+| Unoptimized baked preview | Optimized baked preview |
+| --- | --- |
+| ![Unoptimized baked preview](images/未优化烘焙预览效果.gif) | ![Optimized baked preview](images/优化烘焙预览效果.gif) |
+
+The rigid-body world's **Steps Per Frame** and **Solver Iterations** affect collision precision and performance. Higher values can improve stability for fast-moving bodies or small colliders, but increase simulation cost. Start low and increase them gradually.
+
+![Adjust rigid-body steps and solver iterations](images/调整刚体每帧步数以及迭代次数.jpg)
 
 ## 2. Bone colliders
 
-Colliders are passive obstacles for simulated hair, ribbons, skirts, and clothing. Select one or more bones, set **Collider Radius**, choose **Box**, **Capsule**, or **Sphere**, and click **Add Colliders**. Repeating the operation replaces the generated collider for the same bone.
+Bone colliders are passive obstacles driven by bones. Use them on the torso, arms, legs, or other body parts to interact with simulated hair and clothing. Select one or more bones, set the radius, choose **Box**, **Capsule**, or **Sphere**, and click **Add Colliders**. Adding a collider again for the same bone replaces that add-on collider.
 
-<table><tr>
-<td><img src="images/创建骨骼碰撞体.jpg" alt="Create one bone collider" width="100%"><br><sub>Single collider</sub></td>
-<td><img src="images/创建所有骨骼碰撞体.jpg" alt="Create colliders for selected bones" width="100%"><br><sub>Selected bones</sub></td>
-<td><img src="images/骨骼碰撞体与刚体的碰撞模拟.jpg" alt="Collider and rigid-body simulation" width="100%"><br><sub>Collision result</sub></td>
-</tr></table>
+| Add bone colliders | Collision result |
+| --- | --- |
+| ![Create bone colliders](images/创建骨骼碰撞体.gif) | ![Rigid-body and bone-collider interaction](images/刚体链与骨骼碰撞体的碰撞交互效果.jpg) |
 
-**Show/Hide Colliders** only changes viewport/render visibility; the physics collision remains active. Use **Delete Selected Bone Colliders** or **Delete All > Delete Bone Colliders** to remove generated colliders.
+**Show/Hide** changes viewport and render visibility only. Hidden colliders remain active in physics. Use **Delete Selected Bone Colliders** to remove colliders from selected bones, or use the delete-all controls to remove all generated colliders on the armature.
+
+![Toggle bone-chain and collider visibility](images/骨骼链和骨骼碰撞体的显示与隐藏.gif)
+
+![Delete generated content by module](images/删除对应模块的所有内容.gif)
 
 ## 3. IK binding
 
-The IK module creates Blender-native IK constraints and a movable custom control. The control is intended as a translation handle, with rotation and scale locked by default.
+The add-on creates Blender-native IK constraints and a movable custom control shape. **IK Custom Object Scale** applies one value uniformly to the X, Y, and Z axes.
 
 ### Continuous-chain mode
 
-Select a continuous chain with its end bone active and click **Create IK Bone Chain**. A generated IK control is placed at the active end and the end bone receives the solver.
+Select a continuous IK chain and make its end bone active, then click **Create IK Bone Chain**. The add-on creates an IK control bone and control shape, then adds an IK constraint to the solver chain.
 
 ### Two-island mode
 
-Select an existing IK control as the active bone and select a separate chain to solve. The active island must contain exactly one bone; the other island must be a connected, unbranched chain. The active bone is reused as the IK target, the terminal bone of the chain receives the constraint, and chain length equals the number of chain bones. Selections with more than two islands, a multi-bone active island, or a branched chain are rejected.
+To bind an existing, separate IK control bone:
 
-<table>
-<tr><td><img src="images/非连续ik链选择手臂.jpg" alt="Select two-island arm IK" width="100%"><br><sub>Arm selection</sub></td><td><img src="images/非连续ik链创建手臂.jpg" alt="Create two-island arm IK" width="100%"><br><sub>Arm IK result</sub></td></tr>
-<tr><td><img src="images/非连续ik链选择脚部.jpg" alt="Select two-island foot IK" width="100%"><br><sub>Foot selection</sub></td><td><img src="images/非连续ik链创建脚部.jpg" alt="Create two-island foot IK" width="100%"><br><sub>Foot IK result</sub></td></tr>
-</table>
+1. Select the existing IK control bone and make it active. This island must contain exactly one bone.
+2. Also select the separate, continuous, unbranched chain to solve.
+3. Click **Create IK Bone Chain**.
 
-**IK Custom Object Scale** is one user-editable value, defaulting to `0.75`. The same value is written to the custom object's X, Y, and Z scale. The custom-shape translation and IK pose offset are reset to zero when the IK is created.
+The active bone is reused as the IK target, so no additional control bone is created. The terminal bone of the other island receives the IK constraint, and the chain length is based on the selected solver bones. Selections with more than two islands, multiple bones in the control island, or a branched solver chain are rejected.
+
+![Create an IK bone chain](images/IK骨骼链的创建.gif)
+
+Use **Delete Selected Bone IK** from a related control or IK bone to remove its generated binding. **Delete All IK Bones** removes the add-on's IK content from the armature.
 
 ## 4. Rotation transfer
 
-Rotation transfer is useful for fingers and helper chains that should inherit a parent's local X rotation. Select one bone or a continuous chain, make the intended starting bone active, and click **Add**.
+Rotation transfer is useful for fingers and helper bones that should inherit a parent's local X-axis rotation. Select a continuous chain, make the source bone active, and click **Add**. The add-on adds local-space `Copy Rotation` constraints to following bones, using only the X axis. Repeating the operation replaces only the add-on's transfer constraints and leaves other custom constraints intact.
 
-<table><tr>
-<td><img src="images/旋转传递手指选择.jpg" alt="Select finger rotation-transfer chain" width="50%"><br><sub>Select chain</sub></td>
-<td><img src="images/旋转传递手指创建与使用.jpg" alt="Use finger rotation transfer" width="50%"><br><sub>Create and use</sub></td>
-</tr></table>
+**Delete** removes rotation-transfer constraints from selected bones. **Delete All Rotation Transfer** clears the add-on's rotation-transfer constraints from the armature.
 
-The add-on creates `Copy Rotation` constraints that use only the local X axis. Re-adding replaces only this add-on's generated transfer constraints and leaves manually authored constraints untouched. **Delete** removes transfers from selected bones; **Delete All Rotation Transfer** clears all transfers generated by this add-on on the active armature.
-
-
-## 5. Convert to MMD rigid bodies
-
-With **mmd_tools** enabled, click **MMD Physics > Convert to MMD Rigid Bodies** in the add-on panel. The operator copies the active armature's generated dynamic bodies, root anchors, bone colliders, and chain joints into native mmd_tools objects, including:
-
-- bone bindings, shape sizes, mass, damping, friction, bounce, and collision groups;
-- joint linear/angular limits and spring settings;
-- an MMD model root with `rigidbodies` and `joints` groups.
-
-The native RBS simulation is preserved. Running the conversion again replaces only objects previously generated by this exporter. The result uses mmd_tools' `mmd_type`, `mmd_rigid`, and `mmd_joint` data and can be edited in mmd_tools or exported through its PMX workflow. If mmd_tools is not enabled, the operator cancels with an explanatory message instead of producing incomplete metadata.
-
-### “mmd_tools not detected” although it is enabled
-
-Older versions also reported **mmd_tools initialization failures** as “not detected”. For example, the full mmd_tools add-on may be enabled but fail to initialize because the Blender Python environment is missing the `opencc` dependency. Blender 4.2+ extensions may load the main module as `bl_ext.<repository>.mmd_tools` instead of top-level `mmd_tools`; v1.1.2 detects both forms. The latest version prints the original traceback and distinguishes a missing main add-on, a missing dependency, and an incompatible API. `mmd_tools_append` is not a replacement for the full mmd_tools add-on.
+![Finger rotation transfer](images/手指的旋转传递效果.gif)
 
 ## Visibility, deletion, and tips
 
-- Generated objects use the `RBS_` prefix and are organized under `RBS_Physics`, `RBS_Bodies`, `RBS_Colliders`, and `RBS_IK_Controls`.
-- **Show/Hide Body Proxies** and **Show/Hide Colliders** affect display only; use the delete operators to remove simulation content.
-- Create the rigid-body chain first, add colliders second, and add IK or rotation transfer after the rig structure is stable.
-- Keep chain selections linear. Split branches into separate operations.
-- Increase damping when a chain jitters; reduce mass or increase collider radius when the result feels too loose or penetrates nearby geometry.
-- To rebuild an IK binding, delete the current IK first, then select the desired chain and create it again.
+- **Show/Hide Proxies** changes visibility for rigid-body proxies on the active armature only; physics continues running. Collider visibility behaves the same way.
+- **Delete Selected Bone Bodies** removes generated proxies and joints associated with selected bones. The delete-all controls clear rigid-body chains, colliders, IK, or rotation transfer by module.
+- Cleanup controls remove generated content from the selected module independently, keeping unrelated module content separate.
+- Keep chain selections unambiguous. Single-chain mode expects a continuous parent-child chain; multi-chain mode identifies chains from their selected roots or child bones.
+- If chains penetrate or jitter, check collider radius, proxy length, mass, and damping. Thin structures may need a smaller radius and adjusted spring settings.
+- If proxies are displaced or the cache is stale, inspect the cache first; clear or rebake it, then reset proxy positions as needed.
+- Results depend on armature hierarchy, scene scale, rigid-body world settings, and cache state. Test settings on a short chain before applying them to a complete character.
 
-The interface follows Blender's language setting: Simplified and Traditional Chinese use Chinese labels, while other languages use English.
-
-## License
-
-GPL-3.0-or-later
+This add-on uses Blender's built-in rigid-body system and is licensed under **GPL-3.0-or-later**.
